@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'data/auth_service.dart';
 import 'package:flutter/material.dart';
@@ -553,100 +552,167 @@ class _GhostNotesScreenState extends State<GhostNotesScreen> {
     return result;
   }
 
-  Future<void> _editNote([GhostNote? existing]) async {
-    final titleController = TextEditingController(text: existing?.title ?? '');
-    final contentController = TextEditingController(
-      text: existing?.content ?? '',
-    );
 
+Future<void> _editNote([GhostNote? existing]) async {
+  final titleController = TextEditingController(
+    text: existing?.title ?? '',
+  );
+  final contentController = TextEditingController(
+    text: existing?.content ?? '',
+  );
+
+  bool isSaving = false;
+  String? errorMessage;
+
+  try {
     final result = await showDialog<GhostNote>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(existing == null ? 'New note' : 'Edit note'),
-        content: SizedBox(
-          width: 480,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleController,
-                  autofocus: true,
-                  maxLength: 100,
-                  decoration: const InputDecoration(
-                    labelText: 'Title',
-                    hintText: 'Give your note a title',
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(existing == null ? 'New note' : 'Edit note'),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleController,
+                    autofocus: true,
+                    maxLength: 100,
+                    decoration: const InputDecoration(
+                      labelText: 'Title',
+                      hintText: 'Give your note a title',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: contentController,
-                  minLines: 5,
-                  maxLines: 12,
-                  decoration: const InputDecoration(
-                    labelText: 'Your thoughts',
-                    hintText: 'Start writing...',
-                    alignLabelWithHint: true,
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: contentController,
+                    minLines: 5,
+                    maxLines: 12,
+                    decoration: const InputDecoration(
+                      labelText: 'Your thoughts',
+                      hintText: 'Start writing...',
+                      alignLabelWithHint: true,
+                    ),
                   ),
-                ),
-              ],
+                  if (errorMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      errorMessage!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: isSaving
+                  ? null
+                  : () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isSaving
+                  ? null
+                  : () async {
+                      final title = titleController.text.trim();
+                      final content = contentController.text.trim();
+
+                      if (title.isEmpty && content.isEmpty) {
+                        setDialogState(() {
+                          errorMessage =
+                              'Please enter a title or some content.';
+                        });
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isSaving = true;
+                        errorMessage = null;
+                      });
+
+                      final note = GhostNote(
+                        id: existing?.id ?? _nextId,
+                        title: title.isEmpty ? 'Untitled note' : title,
+                        content: content,
+                        updatedAt: DateTime.now(),
+                        ownerEmail: widget.accountEmail,
+                        isPinned: existing?.isPinned ?? false,
+                      );
+
+                      try {
+                        await _notesStore
+                            .record(_noteKey(note))
+                            .put(ghostDatabase, note.toJson());
+
+                        if (!dialogContext.mounted) return;
+
+                        Navigator.pop(dialogContext, note);
+                      } catch (error) {
+                        if (!dialogContext.mounted) return;
+
+                        setDialogState(() {
+                          isSaving = false;
+                          errorMessage =
+                              'Could not save your note. Please try again. '
+                              '($error)';
+                        });
+                      }
+                    },
+              child: isSaving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save note'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final title = titleController.text.trim();
-              final content = contentController.text.trim();
-
-              if (title.isEmpty && content.isEmpty) {
-                Navigator.pop(dialogContext);
-                return;
-              }
-
-              Navigator.pop(
-                dialogContext,
-                GhostNote(
-                  id: existing?.id ?? _nextId++,
-                  title: title.isEmpty ? 'Untitled note' : title,
-                  content: content,
-                  updatedAt: DateTime.now(),
-                  ownerEmail: widget.accountEmail,
-                  isPinned: existing?.isPinned ?? false,
-                ),
-              );
-            },
-            child: const Text('Save note'),
-          ),
-        ],
       ),
     );
 
-    titleController.dispose();
-    contentController.dispose();
-
     if (!mounted || result == null) return;
 
-    await _notesStore.record(_noteKey(result)).put(
-      ghostDatabase,
-      result.toJson(),
-    );
-
-    if (!mounted) return;
-
     setState(() {
-      final index = _notes.indexWhere((note) => note.id == result.id);
+      if (existing == null) {
+        _nextId++;
+      }
+
+      final index = _notes.indexWhere(
+        (note) => note.id == result.id,
+      );
+
       if (index == -1) {
         _notes.add(result);
       } else {
         _notes[index] = result;
       }
     });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Note saved successfully.'),
+      ),
+    );
+  } catch (error) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Unable to save note: $error'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  } finally {
+    titleController.dispose();
+    contentController.dispose();
   }
+}
 
   Future<void> _togglePin(GhostNote note) async {
     final index = _notes.indexWhere((item) => item.id == note.id);
